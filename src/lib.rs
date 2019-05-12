@@ -1,5 +1,5 @@
-extern crate bincode;
 extern crate byteorder;
+extern crate serde_cbor;
 extern crate serde;
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -96,7 +96,7 @@ impl<T: Survivable> Survive<T> {
         }
 
         mutation.mutate(&mut self.data);
-        let buf = bincode::serialize(&mutation)?;
+        let buf = serde_cbor::to_vec(&mutation)?;
 
         let write_result = if self.options.use_journal_buffer {
             write_buf(&mut self.journal, buf.as_ref())
@@ -129,7 +129,7 @@ impl<T: Survivable> Survive<T> {
         let transitional_state_path = self.path.join("state~");
 
         let mut transitional_state = BufWriter::new(File::create(&transitional_state_path)?);
-        bincode::serialize_into(&mut transitional_state, &self.data)?;
+        serde_cbor::to_writer(&mut transitional_state, &self.data)?;
 
         if state_path.exists() {
             fs::remove_file(&state_path)?;
@@ -171,7 +171,7 @@ impl<T: Survivable> Survive<T> {
             fs::remove_file(&transitional_state_path)?;
         }
 
-        let mut data = bincode::deserialize_from(BufReader::new(File::open(state_path)?))?;
+        let mut data = serde_cbor::from_reader(BufReader::new(File::open(state_path)?))?;
         if journal_path.exists() {
             let mut journal = BufReader::new(File::open(journal_path)?);
             loop {
@@ -196,7 +196,7 @@ impl<T: Survivable> Survive<T> {
                     }
                 }
 
-                let mutation: T::Mutation = bincode::deserialize(&buf)?;
+                let mutation: T::Mutation = serde_cbor::from_slice(&buf)?;
                 mutation.mutate(&mut data);
             }
         }
@@ -268,14 +268,14 @@ impl Default for Options {
 #[derive(Debug)]
 pub enum Error {
     /// A serialization or deserialization error.
-    Bincode(bincode::Error),
+    Cbor(serde_cbor::error::Error),
     /// A system I/O error.
     Io(io::Error),
 }
 
-impl From<bincode::Error> for Error {
-    fn from(err: bincode::Error) -> Error {
-        Error::Bincode(err)
+impl From<serde_cbor::error::Error> for Error {
+    fn from(err: serde_cbor::error::Error) -> Error {
+        Error::Cbor(err)
     }
 }
 

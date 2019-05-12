@@ -41,6 +41,9 @@ There are some catches, of course:
 For a technical explanation of Survive, please refer to the source code's
 documentation. The code is lightweight and the details are simple.
 
+Survive uses [CBOR](https://github.com/pyfisch/cbor) under the hood for
+serialization.
+
 ## Full example
 
 ```toml
@@ -69,9 +72,6 @@ impl Survivable for Model {
 }
 
 // The master data mutation structure.
-//
-// Warning: Serialization of enum variants are not guaranteed to be stable...
-// This mutation interface needs some work.
 #[derive(Deserialize, Serialize)]
 enum ModelMutation {
     // Add a value to the set.
@@ -111,13 +111,13 @@ fn main() {
 
 Some quick numbers: On my reasonably powered development computer I am able to
 create and persist a `BTreeSet<String>` with 1,000,000 individually-added
-strings in ~700ms, where each string is approximately 6 bytes long like in the
-above example. The resultant data directory is ~20 MB in size. Re-loading the
-persisted data takes about ~400ms.
+strings in ~750ms, where each string is approximately 6 bytes long like in the
+above example. The resultant snapshot file is ~7 MB in size. Re-loading the
+snapshot takes about ~500ms.
 
 The current architecture seems to scale reasonably well to data approaching 1
 GB, but some performance tuning (see `survive::Options`) is necessary. Most
-problematic is the automatic "compaction" (full-data snapshotting) that Survive
+problematic is the automatic compaction (full-data snapshotting) that Survive
 does by default, which occurs after a certain number of journaled mutations and
 blocks execution. There's a trade-off here between 1) start-up time and journal
 file length, and 2) occasional runtime pauses to save data snapshots.
@@ -132,11 +132,11 @@ and data indexes can be catered exactly to your needs.
 
 System prevalence has been around since at least 2001 with Klaus Wuestefeld's
 [Prevayler](http://prevayler.org/), an implementation of the pattern in Java.
-The simplicity of this architectural model is quite appealing, but there are
-many trade-offs to consider when adopting it. Unfortunately there's a shocking
-amount of dogmatism on both sides, which can be reviewed on the legendary
-[wiki.c2.com](http://wiki.c2.com/?PrevalenceLayer). Even if the discussion is
-quite old, most of the points seem to me to still be relevant today.
+The simplicity of this architectural model is quite appealing. However, there
+are trade-offs to consider when adopting it, which can be reviewed on the
+legendary [wiki.c2.com](http://wiki.c2.com/?PrevalenceLayer). Even if the
+discussion is quite old, most of the points seem to me to still be relevant
+today.
 
 * [Object Prevalence: An In-Memory, No-Database Solution to
   Persistence](https://medium.com/@paul_83250/object-prevalence-an-in-memory-no-database-solution-to-persistence-a1ebcd1493b0)
