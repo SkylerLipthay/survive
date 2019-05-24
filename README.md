@@ -81,6 +81,8 @@ enum ModelMutation {
 }
 
 impl Mutation<Model> for ModelMutation {
+    type Result = ();
+
     // The implementation of this function **must be deterministic**!
     fn mutate(&self, data: &mut Model) {
         match *self {

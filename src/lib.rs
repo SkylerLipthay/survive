@@ -88,14 +88,13 @@ impl<T: Survivable> Survive<T> {
     }
 
     /// Performs a mutation on the underlying data.
-    pub fn mutate<M: Mutation<T>>(&mut self, mutation: &M) -> Result<(), Error> {
+    pub fn mutate<M: Mutation<T>>(&mut self, mutation: &M) -> Result<M::Result, Error> {
         fn write_buf(w: &mut Write, buf: &[u8]) -> Result<(), Error> {
             w.write_u32::<LittleEndian>(buf.len() as u32)?;
             w.write_all(buf.as_ref())?;
             Ok(())
         }
 
-        mutation.mutate(&mut self.data);
         let buf = serde_cbor::to_vec(&mutation)?;
 
         let write_result = if self.options.use_journal_buffer {
@@ -103,19 +102,21 @@ impl<T: Survivable> Survive<T> {
         } else {
             write_buf(&mut self.journal, buf.as_ref()).and_then(|_| Ok(self.journal.flush()?))
         };
+
         // If writing fails, the journal file may be corrupted and compaction should be triggered
         // immediately.
         if write_result.is_err() {
-            return self.compact();
-        }
-
-        self.journal_file_length += 4 + buf.len();
-        if let Some(max) = self.options.max_journal_file_length {
-            if self.journal_file_length > max {
-                self.compact()?;
+            self.compact()?;
+        } else {
+            self.journal_file_length += 4 + buf.len();
+            if let Some(max) = self.options.max_journal_file_length {
+                if self.journal_file_length > max {
+                    self.compact()?;
+                }
             }
         }
-        Ok(())
+
+        Ok(mutation.mutate(&mut self.data))
     }
 
     /// Returns the current length of the journal file in bytes.
@@ -212,6 +213,8 @@ pub trait Survivable: Default + Serialize + DeserializeOwned {
 
 /// A serializable change to the `Survivable` data.
 pub trait Mutation<T: Survivable>: Serialize + DeserializeOwned {
+    type Result;
+
     /// Makes a change to the data.
     ///
     /// # Determinism
@@ -228,7 +231,7 @@ pub trait Mutation<T: Survivable>: Serialize + DeserializeOwned {
     ///
     /// These violations produce different results on subsequent "replays" (i.e. when the journal
     /// file is processed).
-    fn mutate(&self, data: &mut T);
+    fn mutate(&self, data: &mut T) -> Self::Result;
 }
 
 /// Settings for tweaking the performance of a `Survive` instance.
