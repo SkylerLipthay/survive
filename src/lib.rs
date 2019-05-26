@@ -145,7 +145,7 @@ impl<T: Survivable> Survive<T> {
     }
 
     /// Performs a mutation on the underlying data.
-    pub fn mutate<M: Mutation<T>>(&mut self, mutation: &M) -> Result<M::Result, Error> {
+    pub fn mutate<M: Mutation<T>>(&mut self, mutation: M) -> Result<M::Result, Error> {
         fn write_buf(w: &mut Write, mutation_id: u32, buf: &[u8]) -> Result<(), Error> {
             w.write_u32::<LittleEndian>(mutation_id)?;
             w.write_u32::<LittleEndian>(buf.len() as u32)?;
@@ -300,7 +300,7 @@ pub trait Mutation<T: Survivable>: Serialize + DeserializeOwned {
     // The type returned by `Mutation::mutate`.
     type Result;
 
-    /// Makes a change to the data.
+    /// Commits a change to the data.
     ///
     /// # Determinism
     ///
@@ -316,7 +316,7 @@ pub trait Mutation<T: Survivable>: Serialize + DeserializeOwned {
     ///
     /// These violations produce different results on subsequent "replays" (i.e. when the journal
     /// file is processed).
-    fn mutate(&self, data: &mut T) -> Self::Result;
+    fn mutate(self, data: &mut T) -> Self::Result;
 }
 
 #[derive(Clone)]

@@ -65,8 +65,8 @@ impl Mutation<Model> for Add {
     type Result = ();
 
     // The implementation of this function **must be deterministic**!
-    fn mutate(&self, data: &mut Model) {
-        data.set.insert(self.0.clone());
+    fn mutate(self, data: &mut Model) {
+        data.set.insert(self.0);
     }
 }
 
@@ -78,7 +78,7 @@ impl Mutation<Model> for Remove {
     const ID: u32 = 2;
     type Result = ();
 
-    fn mutate(&self, data: &mut Model) {
+    fn mutate(self, data: &mut Model) {
         data.set.remove(&self.0);
     }
 }
@@ -86,10 +86,10 @@ impl Mutation<Model> for Remove {
 fn main() {
     // Create a new home for some data (assuming the specified directory does not yet exist):
     let mut data = Survive::<Model>::new("path/to/some-directory").unwrap();
-    data.mutate(&Add("Hello!".to_string())).unwrap();
-    data.mutate(&Add("World!".to_string())).unwrap();
+    data.mutate(Add("Hello!".to_string())).unwrap();
+    data.mutate(Add("World!".to_string())).unwrap();
     assert_eq!(data.get().values.contains("Hello!"));
-    data.mutate(&Remove("Hello!".to_string())).unwrap();
+    data.mutate(Remove("Hello!".to_string())).unwrap();
     // The system is closed on drop:
     drop(data);
 
