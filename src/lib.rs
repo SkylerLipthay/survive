@@ -208,7 +208,11 @@ impl<T: Survivable> Survive<T> {
     fn open<P: AsRef<Path>>(path: P, builder: &Builder<T>) -> Result<Survive<T>, Error> {
         let path = path.as_ref().to_path_buf();
         let data = Self::load(path.as_ref(), &builder.mutation_types)?
-            .unwrap_or_else(|| T::default());
+            .unwrap_or_else(|| {
+                let mut data = T::default();
+                data.state_loaded();
+                data
+            });
         let journal_path = path.join("journal");
         let journal_file = fs::OpenOptions::new().append(true).create(true).open(&journal_path)?;
         let journal = BufWriter::new(journal_file);
@@ -245,7 +249,8 @@ impl<T: Survivable> Survive<T> {
             fs::remove_file(&transitional_state_path)?;
         }
 
-        let mut data = serde_cbor::from_reader(BufReader::new(File::open(state_path)?))?;
+        let mut data: T = serde_cbor::from_reader(BufReader::new(File::open(state_path)?))?;
+        data.state_loaded();
         if journal_path.exists() {
             let mut journal = BufReader::new(File::open(journal_path)?);
             loop {
@@ -290,7 +295,11 @@ fn ignore_eof<T>(result: Result<T, io::Error>) -> Result<Option<T>, Error> {
 }
 
 /// A type that can be persisted by `Survive`.
-pub trait Survivable: Default + Serialize + DeserializeOwned { }
+pub trait Survivable: Default + Serialize + DeserializeOwned {
+    /// Called when the state has been loaded from file, but before the journal has been processed.
+    /// If a persisted data file does not exist, this is called anyway.
+    fn state_loaded(&mut self) { }
+}
 
 /// A serializable change to the `Survivable` data.
 pub trait Mutation<T: Survivable>: Serialize + DeserializeOwned {
