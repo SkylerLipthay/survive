@@ -155,7 +155,7 @@ impl<T: Survivable> Survive<T> {
             Ok(())
         }
 
-        let buf = serde_cbor::to_vec(&mutation)?;
+        let buf = serde_cbor::ser::to_vec_packed(&mutation)?;
 
         let write_result = if self.options.use_journal_buffer {
             write_buf(&mut self.journal, M::ID, buf.as_ref())
@@ -192,7 +192,7 @@ impl<T: Survivable> Survive<T> {
         let transitional_state_path = self.path.join("state~");
 
         let mut transitional_state = BufWriter::new(File::create(&transitional_state_path)?);
-        serde_cbor::to_writer(&mut transitional_state, &self.data)?;
+        serde_cbor::ser::to_writer_packed(&mut transitional_state, &self.data)?;
 
         if state_path.exists() {
             fs::remove_file(&state_path)?;
