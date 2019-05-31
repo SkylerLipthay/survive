@@ -6,6 +6,8 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     collections::BTreeMap,
+    error::Error as StdError,
+    fmt::{self, Display},
     fs::{self, File},
     io::{self, Read, Write, BufReader, BufWriter},
     path::{Path, PathBuf},
@@ -364,5 +366,33 @@ impl From<serde_cbor::error::Error> for Error {
 impl From<io::Error> for Error {
     fn from(err: io::Error) -> Error {
         Error::Io(err)
+    }
+}
+
+impl StdError for Error {
+    fn description(&self) -> &str {
+        match *self {
+            Error::Cbor(ref err) => err.description(),
+            Error::Io(ref err) => err.description(),
+            Error::UnregisteredMutation { .. } => "unregistered mutation encountered",
+        }
+    }
+
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match *self {
+            Error::Cbor(ref err) => err.source(),
+            Error::Io(ref err) => err.source(),
+            _ => None,
+        }
+    }
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        match *self {
+            Error::Cbor(ref err) => Display::fmt(err, f),
+            Error::Io(ref err) => Display::fmt(err, f),
+            Error::UnregisteredMutation { id } => write!(f, "unregistered mutation: ID {}", id),
+        }
     }
 }
