@@ -56,40 +56,34 @@ struct Model {
 
 impl Survivable for Model { }
 
-// Add a value to the set.
 #[derive(Deserialize, Serialize)]
-struct Add(String);
+enum ModelMutation {
+    // Add a value to the set.
+    Add(String),
+    // Remove a value to the set.
+    Remove(String),
+}
 
-impl Mutation<Model> for Add {
-    const ID: u32 = 1;
+
+impl Mutation<Model> for ModelMutation {
     type Result = ();
 
     // The implementation of this function **must be deterministic**!
     fn mutate(self, data: &mut Model) {
-        data.set.insert(self.0);
-    }
-}
-
-// Remove a value from the set.
-#[derive(Deserialize, Serialize)]
-struct Remove(String);
-
-impl Mutation<Model> for Remove {
-    const ID: u32 = 2;
-    type Result = ();
-
-    fn mutate(self, data: &mut Model) {
-        data.set.remove(&self.0);
+        match self {
+            ModelMutation::Add(ref value) => { data.values.insert(value.clone()); },
+            ModelMutation::Remove(ref value) => { data.values.remove(value); },
+        }
     }
 }
 
 fn main() {
     // Create a new home for some data (assuming the specified directory does not yet exist):
     let mut data = Survive::<Model>::new("path/to/some-directory").unwrap();
-    data.mutate(Add("Hello!".to_string())).unwrap();
-    data.mutate(Add("World!".to_string())).unwrap();
+    data.mutate(FooMutation::Add("Hello!".to_string())).unwrap();
+    data.mutate(FooMutation::Add("World!".to_string())).unwrap();
     assert_eq!(data.get().values.contains("Hello!"));
-    data.mutate(Remove("Hello!".to_string())).unwrap();
+    data.mutate(FooMutation::Remove("Hello!".to_string())).unwrap();
     // The system is closed on drop:
     drop(data);
 

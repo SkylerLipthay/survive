@@ -5,90 +5,12 @@ extern crate serde;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
-    collections::BTreeMap,
     error::Error as StdError,
     fmt::{self, Display},
     fs::{self, File},
     io::{self, Read, Write, BufReader, BufWriter},
     path::{Path, PathBuf},
 };
-
-type MutationTypes<T> = BTreeMap<u32, Box<Fn(&[u8], &mut T) -> Result<(), Error>>>;
-
-/// Used as the entry point into the library and to construct a `Survive` instance.
-pub struct Builder<T: Survivable> {
-    options: Options,
-    mutation_types: MutationTypes<T>,
-}
-
-impl<T: Survivable> Builder<T> {
-    /// Begins the process of constructing a `Survive` instance.
-    pub fn new() -> Builder<T> {
-        Builder {
-            options: Options::default(),
-            mutation_types: MutationTypes::new(),
-        }
-    }
-
-    /// Creates the `Survive` instance.
-    ///
-    /// This opens and synchronizes with a persisted instance of the data type `T`. If a persistence
-    /// does not yet exist, it is created using the `Default` implementation of `T`.
-    ///
-    /// The given `path` is a path to a directory that will contain all of the necessary files to
-    /// persist the data. If the directory or any of its parents do not exist, they will be
-    /// recursively created.
-    pub fn open<P: AsRef<Path>>(&self, path: P) -> Result<Survive<T>, Error> {
-        Survive::open(path, self)
-    }
-
-    /// Registers a mutation type to be used when restoring the data from its journal file.
-    ///
-    /// # Panics
-    ///
-    /// Panics if a mutation type already exists with the given `Mutation::ID`.
-    pub fn register<M: Mutation<T>>(&mut self) -> &mut Builder<T> {
-        if self.mutation_types.contains_key(&M::ID) {
-            panic!("Mutation already registered with ID {}", M::ID);
-        }
-
-        self.mutation_types.insert(M::ID, Box::new(|buf, data| {
-            let mutation: M = serde_cbor::from_slice(buf)?;
-            mutation.mutate(data);
-            Ok(())
-        }));
-        self
-    }
-
-    /// The limit of the journal file length (in bytes). When the length exceeds this value,
-    /// `Survive` will automatically compact the state file and clear the journal.
-    ///
-    /// If this is `None`, automatic compaction is disabled. If this is `Some(0)`, compaction runs
-    /// after every data mutation.
-    ///
-    /// By default, this is set to 10 MB (10,485,760 bytes).
-    pub fn max_journal_file_length(&mut self, max: Option<usize>) -> &mut Builder<T> {
-        self.options.max_journal_file_length = max;
-        self
-    }
-
-    /// By default, Writing to the journal file is buffered (via `BufWriter`). This improves
-    /// mutation performance significantly (in some experiments, by approximately an order of
-    /// magnitude), but comes at a disadvantage. Because serialized mutations are not flushed to the
-    /// journal file immediately, abnormal program closure can cause the mutations to not be
-    /// journaled and thus lost forever.
-    ///
-    /// At the time of writing, we use `BufWriter`'s default of an 8 KB buffer. So, for reasonably
-    /// small transactions (in terms of their serialized bytes), a crash can result in approximately
-    /// 8 KB of transactions to be lost. In the case of a large transaction that exceeds 8 KB in
-    /// serialized size, the entire large transaction can be lost.
-    ///
-    /// To disable journal file write buffering, set this to `false`.
-    pub fn use_journal_buffer(&mut self, use_it: bool) -> &mut Builder<T> {
-        self.options.use_journal_buffer = use_it;
-        self
-    }
-}
 
 /// A representation of a persistable data type.
 ///
@@ -141,6 +63,26 @@ pub struct Survive<T: Survivable> {
 }
 
 impl<T: Survivable> Survive<T> {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Survive<T>, Error> {
+        Self::with_options(path, Options::default())
+    }
+
+    pub fn with_options<P: AsRef<Path>>(path: P, options: Options) -> Result<Survive<T>, Error> {
+        let path = path.as_ref().to_path_buf();
+        let data = Self::load(path.as_ref())?
+            .unwrap_or_else(|| {
+                let mut data = T::default();
+                data.state_loaded();
+                data
+            });
+        let journal_path = path.join("journal");
+        let journal_file = fs::OpenOptions::new().append(true).create(true).open(&journal_path)?;
+        let journal = BufWriter::new(journal_file);
+        let mut result = Survive { path, data, journal, journal_file_length: 0, options };
+        result.compact()?;
+        Ok(result)
+    }
+
     /// Returns an immutable reference to the underlying data.
     pub fn get(&self) -> &T {
         &self.data
@@ -148,8 +90,7 @@ impl<T: Survivable> Survive<T> {
 
     /// Performs a mutation on the underlying data.
     pub fn mutate<M: Mutation<T>>(&mut self, mutation: M) -> Result<M::Result, Error> {
-        fn write_buf(w: &mut Write, mutation_id: u32, buf: &[u8]) -> Result<(), Error> {
-            w.write_u32::<LittleEndian>(mutation_id)?;
+        fn write_buf(w: &mut Write, buf: &[u8]) -> Result<(), Error> {
             w.write_u32::<LittleEndian>(buf.len() as u32)?;
             w.write_all(buf.as_ref())?;
             Ok(())
@@ -158,9 +99,9 @@ impl<T: Survivable> Survive<T> {
         let buf = serde_cbor::ser::to_vec_packed(&mutation)?;
 
         let write_result = if self.options.use_journal_buffer {
-            write_buf(&mut self.journal, M::ID, buf.as_ref())
+            write_buf(&mut self.journal, buf.as_ref())
         } else {
-            write_buf(&mut self.journal, M::ID, buf.as_ref()).and_then(|_| {
+            write_buf(&mut self.journal, buf.as_ref()).and_then(|_| {
                 Ok(self.journal.flush()?)
             })
         };
@@ -207,24 +148,7 @@ impl<T: Survivable> Survive<T> {
         Ok(())
     }
 
-    fn open<P: AsRef<Path>>(path: P, builder: &Builder<T>) -> Result<Survive<T>, Error> {
-        let path = path.as_ref().to_path_buf();
-        let data = Self::load(path.as_ref(), &builder.mutation_types)?
-            .unwrap_or_else(|| {
-                let mut data = T::default();
-                data.state_loaded();
-                data
-            });
-        let journal_path = path.join("journal");
-        let journal_file = fs::OpenOptions::new().append(true).create(true).open(&journal_path)?;
-        let journal = BufWriter::new(journal_file);
-        let options = builder.options.clone();
-        let mut result = Survive { path, data, journal, journal_file_length: 0, options };
-        result.compact()?;
-        Ok(result)
-    }
-
-    fn load(path: &Path, mutation_types: &MutationTypes<T>) -> Result<Option<T>, Error> {
+    fn load(path: &Path) -> Result<Option<T>, Error> {
         fs::create_dir_all(path)?;
 
         let state_path = path.join("state");
@@ -256,11 +180,6 @@ impl<T: Survivable> Survive<T> {
         if journal_path.exists() {
             let mut journal = BufReader::new(File::open(journal_path)?);
             loop {
-                let mutation_id = match ignore_eof(journal.read_u32::<LittleEndian>())? {
-                    Some(mutation_id) => mutation_id,
-                    None => break,
-                };
-
                 let length = match ignore_eof(journal.read_u32::<LittleEndian>())? {
                     Some(length) => length as usize,
                     None => break,
@@ -271,10 +190,8 @@ impl<T: Survivable> Survive<T> {
                     break;
                 }
 
-                match mutation_types.get(&mutation_id) {
-                    Some(process) => { process(&buf, &mut data)?; },
-                    None => return Err(Error::UnregisteredMutation { id: mutation_id }),
-                }
+                let mutation: T::Mutation = serde_cbor::from_slice(&buf)?;
+                mutation.mutate(&mut data);
             }
         }
 
@@ -298,6 +215,8 @@ fn ignore_eof<T>(result: Result<T, io::Error>) -> Result<Option<T>, Error> {
 
 /// A type that can be persisted by `Survive`.
 pub trait Survivable: Default + Serialize + DeserializeOwned {
+    type Mutation: Mutation<Self>;
+
     /// Called when the state has been loaded from file, but before the journal has been processed.
     /// If a persisted data file does not exist, this is called anyway.
     fn state_loaded(&mut self) { }
@@ -305,9 +224,6 @@ pub trait Survivable: Default + Serialize + DeserializeOwned {
 
 /// A serializable change to the `Survivable` data.
 pub trait Mutation<T: Survivable>: Serialize + DeserializeOwned {
-    // A unique identifier that is used to reference this type (see `Builder::register`).
-    const ID: u32;
-
     // The type returned by `Mutation::mutate`.
     type Result;
 
@@ -330,8 +246,8 @@ pub trait Mutation<T: Survivable>: Serialize + DeserializeOwned {
     fn mutate(self, data: &mut T) -> Self::Result;
 }
 
-#[derive(Clone)]
-struct Options {
+#[derive(Clone, Debug)]
+pub struct Options {
     max_journal_file_length: Option<usize>,
     use_journal_buffer: bool,
 }
@@ -351,10 +267,6 @@ pub enum Error {
     Cbor(serde_cbor::error::Error),
     /// A system I/O error.
     Io(io::Error),
-    /// An unrecognized mutation was encountered while reading the journal file.
-    UnregisteredMutation {
-        id: u32,
-    },
 }
 
 impl From<serde_cbor::error::Error> for Error {
@@ -374,7 +286,6 @@ impl StdError for Error {
         match *self {
             Error::Cbor(ref err) => err.description(),
             Error::Io(ref err) => err.description(),
-            Error::UnregisteredMutation { .. } => "unregistered mutation encountered",
         }
     }
 
@@ -382,7 +293,6 @@ impl StdError for Error {
         match *self {
             Error::Cbor(ref err) => err.source(),
             Error::Io(ref err) => err.source(),
-            _ => None,
         }
     }
 }
@@ -392,7 +302,6 @@ impl Display for Error {
         match *self {
             Error::Cbor(ref err) => Display::fmt(err, f),
             Error::Io(ref err) => Display::fmt(err, f),
-            Error::UnregisteredMutation { id } => write!(f, "unregistered mutation: ID {}", id),
         }
     }
 }
