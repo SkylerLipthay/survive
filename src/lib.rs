@@ -248,8 +248,28 @@ pub trait Mutation<T: Survivable>: Serialize + DeserializeOwned {
 
 #[derive(Clone, Debug)]
 pub struct Options {
-    max_journal_file_length: Option<usize>,
-    use_journal_buffer: bool,
+    /// The limit of the journal file length (in bytes). When the length exceeds this value,
+    /// `Survive` will automatically compact the state file and clear the journal.
+    ///
+    /// If this is `None`, automatic compaction is disabled. If this is `Some(0)`, compaction runs
+    /// after every data mutation.
+    ///
+    /// By default, this is set to 10 MB (10,485,760 bytes).
+    pub max_journal_file_length: Option<usize>,
+
+    /// By default, Writing to the journal file is buffered (via `BufWriter`). This improves
+    /// mutation performance significantly (in some experiments, by approximately an order of
+    /// magnitude), but comes at a disadvantage. Because serialized mutations are not flushed to the
+    /// journal file immediately, abnormal program closure can cause the mutations to not be
+    /// journaled and thus lost forever.
+    ///
+    /// At the time of writing, we use `BufWriter`'s default of an 8 KB buffer. So, for reasonably
+    /// small transactions (in terms of their serialized bytes), a crash can result in approximately
+    /// 8 KB of transactions to be lost. In the case of a large transaction that exceeds 8 KB in
+    /// serialized size, the entire large transaction can be lost.
+    ///
+    /// To disable journal file write buffering, set this to `false`.
+    pub use_journal_buffer: bool,
 }
 
 impl Default for Options {
